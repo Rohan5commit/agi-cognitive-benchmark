@@ -1,0 +1,6 @@
+policy,schedule_exact,packet_f1,composite
+apply_all_packets,0.0,0.5038461538461539,0.1752838076923077
+gold,1.0,1.0,1.0
+ignore_updates,0.0,0.0,0.12024688888888889
+latest_visible_key,0.4375,0.375,0.5044345
+same_team_any_status,0.0,0.6464696223316913,0.20455665517241378
