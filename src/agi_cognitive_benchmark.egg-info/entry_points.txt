@@ -1,3 +1,0 @@
-[console_scripts]
-goalshield-baselines = agi_cognitive_benchmark.scripts.run_heuristic_baselines:main
-goalshield-generate = agi_cognitive_benchmark.scripts.generate_dataset:main
