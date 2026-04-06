@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: agi-cognitive-benchmark
+Version: 0.1.0
+Summary: GoalShield: an executive-function benchmark for interrupted plan repair in frontier LLMs.
+Author: Rohan Santhosh Kumar
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pandas>=2.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3; extra == "dev"
+Provides-Extra: kaggle
+Requires-Dist: jupytext>=1.16; extra == "kaggle"
+Requires-Dist: kaggle-benchmarks @ git+https://github.com/Kaggle/kaggle-benchmarks.git@ci ; extra == "kaggle"
+Provides-Extra: novelty
+Requires-Dist: evaluating-agi @ git+https://github.com/kafkasl/evaluating-agi.git ; extra == "novelty"
+Dynamic: license-file

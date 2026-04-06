@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agi-cognitive-benchmark"
+version = "0.1.0"
+description = "GoalShield: an executive-function benchmark for interrupted plan repair in frontier LLMs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Rohan Santhosh Kumar" }
+]
+dependencies = [
+  "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+]
+kaggle = [
+  "jupytext>=1.16",
+  "kaggle-benchmarks @ git+https://github.com/Kaggle/kaggle-benchmarks.git@ci",
+]
+novelty = [
+  "evaluating-agi @ git+https://github.com/kafkasl/evaluating-agi.git",
+]
+
+[project.scripts]
+goalshield-generate = "agi_cognitive_benchmark.scripts.generate_dataset:main"
+goalshield-baselines = "agi_cognitive_benchmark.scripts.run_heuristic_baselines:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
