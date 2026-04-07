@@ -36,9 +36,10 @@ RUN_PLAN_PATH = WORKDIR / "goalshield_run_plan.json"
 RUNTIME_INFO_PATH = WORKDIR / "goalshield_runtime_info.json"
 AVAILABLE_MODELS_PATH = WORKDIR / "goalshield_available_models.json"
 FAILURES_PATH = WORKDIR / "goalshield_failures.json"
+PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "competitive_fast",
+    "name": "competitive_clean",
     "primary_model_count": 6,
     "probe_model_count": 4,
     "robustness_top_k": 2,
@@ -46,25 +47,30 @@ RUN_PROFILE = {
     "evaluation_n_jobs": 6,
     "benchmark_timeout": 180,
     "evaluation_timeout": 180,
+    "retry_n_jobs": 2,
+    "retry_timeout": 300,
+    "max_completion_retries": 2,
 }
 
 MODEL_PRIORITY = [
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "google/gemini-3-flash-preview",
+    "anthropic/claude-opus-4-1@20250805",
+    "anthropic/claude-haiku-4-5@20251001",
+    "openai/gpt-5.4-mini-2026-03-17",
+    "google/gemini-2.0-flash",
+    "google/gemini-2.0-flash-lite",
     "google/gemini-3-pro",
     "google/gemini-3-flash",
-    "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
     "anthropic/claude-opus-4",
     "anthropic/claude-sonnet-4",
+    "openai/gpt-5.4-2026-03-05",
     "openai/gpt-4.5",
     "openai/gpt-4.1",
     "openai/o3",
     "openai/o3-mini-high",
-    "meta/llama-4-maverick",
-    "meta/llama-4-scout",
-    "meta/llama-3.1-405b",
-    "meta/llama-3.1-70b",
-    "xai/grok-3-beta",
-    "deepseek/deepseek-r1",
+    "deepseek-ai/deepseek-r1-0528",
     "qwen/qwen3-32b",
     "mistral/magistral-medium",
 ]
@@ -101,12 +107,16 @@ DATASET_SPECS = {
 BENCHPRESS_MAP = {
     "google/gemini-2.5-flash": "gemini-2.5-flash",
     "google/gemini-2.5-pro": "gemini-2.5-pro",
+    "google/gemini-3-flash-preview": "gemini-3-flash",
     "google/gemini-3-flash": "gemini-3-flash",
     "google/gemini-3-pro": "gemini-3-pro",
     "anthropic/claude-sonnet-4": "claude-sonnet-4",
     "anthropic/claude-opus-4": "claude-opus-4",
+    "anthropic/claude-opus-4-1@20250805": "claude-opus-4",
     "openai/gpt-4.1": "gpt-4.1",
     "openai/gpt-4.5": "gpt-4.5",
+    "openai/gpt-5.4-2026-03-05": "gpt-5.4",
+    "openai/gpt-5.4-mini-2026-03-17": "gpt-5.4-mini",
     "openai/o3": "o3",
     "openai/o3-mini-high": "o3-mini-high",
     "meta/llama-4-maverick": "llama-4-maverick",
@@ -114,6 +124,7 @@ BENCHPRESS_MAP = {
 }
 PROGRESS_LOG: list[dict[str, object]] = []
 FAILURES: list[dict[str, object]] = []
+PARTIAL_MODELS: list[dict[str, object]] = []
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -355,6 +366,17 @@ def persist_summary_bundle(prefix: str, eval_df: pd.DataFrame) -> None:
     )
 
 
+def combine_unique_results(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
+    frames = [frame for frame in [existing_df, new_df] if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(subset=["metric_scenario_id"], keep="last")
+        .reset_index(drop=True)
+    )
+
+
 def evaluate_models(
     *,
     stage_name: str,
@@ -366,7 +388,9 @@ def evaluate_models(
     progress_state: dict[str, int],
 ) -> pd.DataFrame:
     collected_frames: list[pd.DataFrame] = []
+    partial_frames: list[pd.DataFrame] = []
     total_models = len(model_names)
+    expected_count = int(dataset_df.shape[0])
     for index, model_name in enumerate(model_names, start=1):
         append_progress(
             stage=stage_name,
@@ -377,33 +401,97 @@ def evaluate_models(
             extra={"dataset_name": dataset_name, "model_name": model_name},
         )
         try:
-            with kbench.client.enable_cache():
-                runs = goalshield_item.evaluate(
-                    llm=[kbench.llms[model_name]],
-                    evaluation_data=evaluation_df,
-                    max_attempts=1,
-                    retry_delay=15,
-                    timeout=RUN_PROFILE["evaluation_timeout"],
-                    n_jobs=RUN_PROFILE["evaluation_n_jobs"],
-                    remove_run_files=True,
-                    stop_condition=lambda collected_runs: len(collected_runs) == evaluation_df.shape[0],
+            normalized_df = pd.DataFrame()
+            remaining_dataset_df = dataset_df.copy()
+            max_rounds = RUN_PROFILE["max_completion_retries"] + 1
+            for round_index in range(max_rounds):
+                current_eval_df = remaining_dataset_df[["prompt", "scenario_json", "solution_json"]]
+                if current_eval_df.empty:
+                    break
+                timeout = (
+                    RUN_PROFILE["evaluation_timeout"]
+                    if round_index == 0
+                    else RUN_PROFILE["retry_timeout"]
                 )
-            normalized_df = normalize_runs_dataframe(runs, dataset_df, dataset_name, sweep_name)
-            collected_frames.append(normalized_df)
-            combined_df = pd.concat(collected_frames, ignore_index=True)
-            persist_summary_bundle(f"goalshield_{sweep_name}", combined_df)
+                n_jobs = (
+                    RUN_PROFILE["evaluation_n_jobs"]
+                    if round_index == 0
+                    else RUN_PROFILE["retry_n_jobs"]
+                )
+                with kbench.client.enable_cache():
+                    runs = goalshield_item.evaluate(
+                        llm=[kbench.llms[model_name]],
+                        evaluation_data=current_eval_df,
+                        max_attempts=1,
+                        retry_delay=15,
+                        timeout=timeout,
+                        n_jobs=n_jobs,
+                        remove_run_files=True,
+                        stop_condition=lambda collected_runs: len(collected_runs) == current_eval_df.shape[0],
+                    )
+                attempt_df = normalize_runs_dataframe(runs, dataset_df, dataset_name, sweep_name)
+                normalized_df = combine_unique_results(normalized_df, attempt_df)
+                completed_ids = set(normalized_df["metric_scenario_id"]) if not normalized_df.empty else set()
+                remaining_dataset_df = dataset_df[~dataset_df["scenario_id"].isin(completed_ids)].copy()
+                if remaining_dataset_df.empty:
+                    break
+                if round_index < max_rounds - 1:
+                    append_progress(
+                        stage=stage_name,
+                        status="retrying",
+                        detail=f"{dataset_name}: {model_name} retry {round_index + 1}",
+                        completed_units=progress_state["completed"],
+                        total_units=progress_state["total"],
+                        extra={
+                            "dataset_name": dataset_name,
+                            "model_name": model_name,
+                            "completed_scenarios": len(completed_ids),
+                            "expected_scenarios": expected_count,
+                            "remaining_scenarios": int(remaining_dataset_df.shape[0]),
+                        },
+                    )
+
+            final_count = (
+                int(normalized_df["metric_scenario_id"].nunique())
+                if not normalized_df.empty
+                else 0
+            )
+            if final_count == expected_count:
+                collected_frames.append(normalized_df)
+                combined_df = pd.concat(collected_frames, ignore_index=True)
+                persist_summary_bundle(f"goalshield_{sweep_name}", combined_df)
+                completion_status = "completed"
+                completion_extra = {
+                    "dataset_name": dataset_name,
+                    "model_name": model_name,
+                    "scenario_count": final_count,
+                }
+            else:
+                partial_info = {
+                    "stage": stage_name,
+                    "dataset_name": dataset_name,
+                    "model_name": model_name,
+                    "expected_scenarios": expected_count,
+                    "actual_scenarios": final_count,
+                }
+                PARTIAL_MODELS.append(partial_info)
+                write_json(PARTIALS_PATH, PARTIAL_MODELS)
+                if not normalized_df.empty:
+                    partial_frames.append(normalized_df.assign(expected_scenarios=expected_count))
+                    pd.concat(partial_frames, ignore_index=True).to_csv(
+                        WORKDIR / f"goalshield_{sweep_name}_partial_scenario_results.csv",
+                        index=False,
+                    )
+                completion_status = "partial"
+                completion_extra = partial_info
             progress_state["completed"] += 1
             append_progress(
                 stage=stage_name,
-                status="completed",
+                status=completion_status,
                 detail=f"{dataset_name}: {model_name}",
                 completed_units=progress_state["completed"],
                 total_units=progress_state["total"],
-                extra={
-                    "dataset_name": dataset_name,
-                    "model_name": model_name,
-                    "scenario_count": int(normalized_df.shape[0]),
-                },
+                extra=completion_extra,
             )
         except Exception as exc:
             failure = {
@@ -686,6 +774,7 @@ summary_lines = [
     f"- Holdout models requested: `{len(ROBUSTNESS_MODEL_NAMES)}`",
     f"- Estimated total model calls: `{ESTIMATED_TOTAL_CALLS}`",
     f"- Failures captured: `{len(FAILURES)}`",
+    f"- Partial models excluded: `{len(PARTIAL_MODELS)}`",
 ]
 if not PRIMARY_SUMMARY.empty:
     top_row = PRIMARY_SUMMARY.iloc[0]
@@ -708,6 +797,7 @@ append_progress(
         "primary_models_completed": int(PRIMARY_SUMMARY.shape[0]),
         "probe_models_completed": int(PROBE_SUMMARY.shape[0]),
         "robustness_models_completed": int(ROBUSTNESS_SUMMARY.shape[0]),
+        "partial_models_excluded": int(len(PARTIAL_MODELS)),
     },
 )
 print("Saved /kaggle/working/goalshield_model_summary.csv")
@@ -715,6 +805,7 @@ print("Saved /kaggle/working/goalshield_difficulty_summary.csv")
 print("Saved /kaggle/working/goalshield_family_summary.csv")
 print("Saved /kaggle/working/goalshield_error_profile.csv")
 print("Saved /kaggle/working/goalshield_benchpress_input.json")
+print("Saved /kaggle/working/goalshield_partial_models.json")
 print("Saved /kaggle/working/goalshield_progress.json")
 PRIMARY_SUMMARY
 
