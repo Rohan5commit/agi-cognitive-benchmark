@@ -37,6 +37,17 @@ RUNTIME_INFO_PATH = WORKDIR / "goalshield_runtime_info.json"
 AVAILABLE_MODELS_PATH = WORKDIR / "goalshield_available_models.json"
 FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 
+RUN_PROFILE = {
+    "name": "competitive_fast",
+    "primary_model_count": 6,
+    "probe_model_count": 4,
+    "robustness_top_k": 2,
+    "benchmark_n_jobs": 6,
+    "evaluation_n_jobs": 6,
+    "benchmark_timeout": 180,
+    "evaluation_timeout": 180,
+}
+
 MODEL_PRIORITY = [
     "google/gemini-3-pro",
     "google/gemini-3-flash",
@@ -73,17 +84,17 @@ EXCLUDE_MODEL_TERMS = (
 DATASET_SPECS = {
     "primary": {
         "seed": 20260406,
-        "counts": {"easy": 24, "medium": 24, "hard": 24},
+        "counts": {"easy": 18, "medium": 18, "hard": 18},
         "description": "Main benchmark slice used for the Kaggle benchmark entity.",
     },
     "probe": {
         "seed": 20260407,
-        "counts": {"easy": 10, "medium": 10, "hard": 10},
-        "description": "Breadth sweep slice for additional model coverage.",
+        "counts": {"easy": 8, "medium": 8, "hard": 8},
+        "description": "Breadth sweep slice for extra model coverage.",
     },
     "holdout": {
         "seed": 20260408,
-        "counts": {"easy": 8, "medium": 8, "hard": 8},
+        "counts": {"easy": 6, "medium": 6, "hard": 6},
         "description": "Robustness slice for top primary models.",
     },
 }
@@ -372,8 +383,8 @@ def evaluate_models(
                     evaluation_data=evaluation_df,
                     max_attempts=1,
                     retry_delay=15,
-                    timeout=240,
-                    n_jobs=4,
+                    timeout=RUN_PROFILE["evaluation_timeout"],
+                    n_jobs=RUN_PROFILE["evaluation_n_jobs"],
                     remove_run_files=True,
                     stop_condition=lambda collected_runs: len(collected_runs) == evaluation_df.shape[0],
                 )
@@ -425,10 +436,21 @@ CANDIDATE_MODEL_NAMES = ordered_candidate_models(AVAILABLE_MODEL_NAMES)
 if DEFAULT_MODEL_NAME in AVAILABLE_MODEL_NAMES and DEFAULT_MODEL_NAME not in CANDIDATE_MODEL_NAMES:
     CANDIDATE_MODEL_NAMES = [DEFAULT_MODEL_NAME] + CANDIDATE_MODEL_NAMES
 
-PRIMARY_MODEL_NAMES = CANDIDATE_MODEL_NAMES[:8]
-PROBE_MODEL_NAMES = CANDIDATE_MODEL_NAMES[8:16]
-ROBUSTNESS_TOP_K = min(3, len(PRIMARY_MODEL_NAMES))
+PRIMARY_MODEL_NAMES = CANDIDATE_MODEL_NAMES[: RUN_PROFILE["primary_model_count"]]
+PROBE_MODEL_NAMES = CANDIDATE_MODEL_NAMES[
+    RUN_PROFILE["primary_model_count"] : RUN_PROFILE["primary_model_count"] + RUN_PROFILE["probe_model_count"]
+]
+ROBUSTNESS_TOP_K = min(RUN_PROFILE["robustness_top_k"], len(PRIMARY_MODEL_NAMES))
 ROBUSTNESS_REQUESTED_MODEL_NAMES = PRIMARY_MODEL_NAMES[:ROBUSTNESS_TOP_K]
+PRIMARY_SCENARIOS = sum(DATASET_SPECS["primary"]["counts"].values())
+PROBE_SCENARIOS = sum(DATASET_SPECS["probe"]["counts"].values())
+HOLDOUT_SCENARIOS = sum(DATASET_SPECS["holdout"]["counts"].values())
+ESTIMATED_TOTAL_CALLS = (
+    PRIMARY_SCENARIOS
+    + PRIMARY_SCENARIOS * len(PRIMARY_MODEL_NAMES)
+    + PROBE_SCENARIOS * len(PROBE_MODEL_NAMES)
+    + HOLDOUT_SCENARIOS * len(ROBUSTNESS_REQUESTED_MODEL_NAMES)
+)
 
 TOTAL_PROGRESS_UNITS = (
     1
@@ -449,6 +471,7 @@ write_json(
         "default_model": DEFAULT_MODEL_NAME,
         "available_models": AVAILABLE_MODEL_NAMES,
         "candidate_models": CANDIDATE_MODEL_NAMES,
+        "run_profile": RUN_PROFILE,
         "primary_models": PRIMARY_MODEL_NAMES,
         "probe_models": PROBE_MODEL_NAMES,
     },
@@ -459,7 +482,11 @@ append_progress(
     detail="Captured runtime and model inventory",
     completed_units=PROGRESS_STATE["completed"],
     total_units=PROGRESS_STATE["total"],
-    extra={"available_model_count": len(AVAILABLE_MODEL_NAMES)},
+    extra={
+        "available_model_count": len(AVAILABLE_MODEL_NAMES),
+        "run_profile": RUN_PROFILE["name"],
+        "estimated_total_calls": ESTIMATED_TOTAL_CALLS,
+    },
 )
 PROGRESS_STATE["completed"] += 1
 append_progress(
@@ -473,10 +500,12 @@ append_progress(
 
 RUN_PLAN = {
     "default_model": DEFAULT_MODEL_NAME,
+    "run_profile": RUN_PROFILE,
     "dataset_specs": DATASET_SPECS,
     "primary_models": PRIMARY_MODEL_NAMES,
     "probe_models": PROBE_MODEL_NAMES,
     "robustness_requested_models": ROBUSTNESS_REQUESTED_MODEL_NAMES,
+    "estimated_total_calls": ESTIMATED_TOTAL_CALLS,
     "total_progress_units": TOTAL_PROGRESS_UNITS,
 }
 write_json(RUN_PLAN_PATH, RUN_PLAN)
@@ -541,8 +570,8 @@ def goalshield_benchmark(llm, evaluation_df_json: str) -> tuple[float, float]:
             evaluation_data=evaluation_df,
             max_attempts=1,
             retry_delay=15,
-            timeout=240,
-            n_jobs=4,
+            timeout=RUN_PROFILE["benchmark_timeout"],
+            n_jobs=RUN_PROFILE["benchmark_n_jobs"],
             remove_run_files=True,
             stop_condition=lambda collected_runs: len(collected_runs) == evaluation_df.shape[0],
         )
@@ -650,10 +679,12 @@ with open(WORKDIR / "goalshield_benchpress_input.json", "w", encoding="utf-8") a
 summary_lines = [
     "# GoalShield Kaggle Run Summary",
     "",
+    f"- Run profile: `{RUN_PROFILE['name']}`",
     f"- Default benchmark model: `{DEFAULT_MODEL_NAME}`",
     f"- Primary models requested: `{len(PRIMARY_MODEL_NAMES)}`",
     f"- Probe models requested: `{len(PROBE_MODEL_NAMES)}`",
     f"- Holdout models requested: `{len(ROBUSTNESS_MODEL_NAMES)}`",
+    f"- Estimated total model calls: `{ESTIMATED_TOTAL_CALLS}`",
     f"- Failures captured: `{len(FAILURES)}`",
 ]
 if not PRIMARY_SUMMARY.empty:
