@@ -39,40 +39,27 @@ FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "competitive_clean",
-    "primary_model_count": 6,
-    "probe_model_count": 4,
+    "name": "google_submission",
+    "primary_model_count": 4,
+    "probe_model_count": 0,
     "robustness_top_k": 2,
-    "benchmark_n_jobs": 6,
-    "evaluation_n_jobs": 6,
+    "benchmark_n_jobs": 4,
+    "evaluation_n_jobs": 3,
     "benchmark_timeout": 180,
-    "evaluation_timeout": 180,
-    "retry_n_jobs": 2,
-    "retry_timeout": 300,
-    "max_completion_retries": 2,
+    "evaluation_timeout": 240,
+    "retry_n_jobs": 1,
+    "retry_timeout": 420,
+    "max_completion_retries": 4,
 }
 
 MODEL_PRIORITY = [
-    "google/gemini-2.5-flash",
     "google/gemini-2.5-pro",
-    "google/gemini-3-flash-preview",
-    "anthropic/claude-opus-4-1@20250805",
-    "anthropic/claude-haiku-4-5@20251001",
-    "openai/gpt-5.4-mini-2026-03-17",
+    "google/gemini-2.5-flash",
     "google/gemini-2.0-flash",
+    "google/gemini-3-flash-preview",
     "google/gemini-2.0-flash-lite",
-    "google/gemini-3-pro",
     "google/gemini-3-flash",
-    "anthropic/claude-opus-4",
-    "anthropic/claude-sonnet-4",
-    "openai/gpt-5.4-2026-03-05",
-    "openai/gpt-4.5",
-    "openai/gpt-4.1",
-    "openai/o3",
-    "openai/o3-mini-high",
-    "deepseek-ai/deepseek-r1-0528",
-    "qwen/qwen3-32b",
-    "mistral/magistral-medium",
+    "google/gemini-3-pro",
 ]
 EXCLUDE_MODEL_TERMS = (
     "embedding",
@@ -105,6 +92,7 @@ DATASET_SPECS = {
     },
 }
 BENCHPRESS_MAP = {
+    "google/gemini-2.0-flash": "gemini-2.0-flash",
     "google/gemini-2.5-flash": "gemini-2.5-flash",
     "google/gemini-2.5-pro": "gemini-2.5-pro",
     "google/gemini-3-flash-preview": "gemini-3-flash",
