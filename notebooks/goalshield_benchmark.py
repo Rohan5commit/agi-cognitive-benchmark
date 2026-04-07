@@ -39,27 +39,30 @@ FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "google_submission",
+    "name": "google_recovery",
     "primary_model_count": 4,
     "probe_model_count": 0,
-    "robustness_top_k": 2,
-    "benchmark_n_jobs": 4,
-    "evaluation_n_jobs": 3,
+    "robustness_top_k": 1,
+    "benchmark_model_name": "google/gemini-2.0-flash",
+    "benchmark_n_jobs": 2,
+    "evaluation_n_jobs": 2,
     "benchmark_timeout": 180,
     "evaluation_timeout": 240,
     "retry_n_jobs": 1,
     "retry_timeout": 420,
-    "max_completion_retries": 4,
+    "max_completion_retries": 6,
+    "evaluation_batch_size": 6,
+    "retry_batch_size": 3,
 }
 
 MODEL_PRIORITY = [
-    "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
     "google/gemini-2.0-flash",
     "google/gemini-3-flash-preview",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
     "google/gemini-2.0-flash-lite",
-    "google/gemini-3-flash",
-    "google/gemini-3-pro",
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3.1-pro-preview",
 ]
 EXCLUDE_MODEL_TERMS = (
     "embedding",
@@ -214,10 +217,27 @@ def ordered_candidate_models(available_names: list[str]) -> list[str]:
 
 
 def normalize_runs_dataframe(runs, dataset_df: pd.DataFrame, dataset_name: str, sweep_name: str) -> pd.DataFrame:
-    run_df = runs.as_dataframe().copy()
+    run_records = []
+    for run in getattr(runs, "runs", []):
+        record = dict(getattr(run, "params", {}))
+        record["run_id"] = getattr(run, "id", "")
+        record["result"] = getattr(run, "result", None)
+        param_id = getattr(run, "param_id", None)
+        if param_id is not None:
+            record["id"] = param_id
+        error_message = getattr(run, "error_message", None)
+        if error_message:
+            record["error_message"] = error_message
+        run_records.append(record)
+    if not run_records:
+        return pd.DataFrame()
+
+    run_df = pd.DataFrame(run_records).copy()
     run_df["model_name"] = run_df["llm"].map(lambda value: getattr(value, "name", str(value)))
     run_df = run_df.drop(columns=["llm"], errors="ignore")
-    result_df = pd.json_normalize(run_df["result"])
+    result_df = pd.json_normalize(
+        run_df["result"].map(lambda value: value if isinstance(value, dict) else {})
+    )
     result_df.columns = [f"metric_{column}" for column in result_df.columns]
     merged = pd.concat(
         [
@@ -245,7 +265,9 @@ def normalize_runs_dataframe(runs, dataset_df: pd.DataFrame, dataset_name: str, 
     )
     merged["dataset_name"] = dataset_name
     merged["sweep_name"] = sweep_name
-    return merged
+    if "metric_scenario_id" not in merged.columns:
+        return pd.DataFrame()
+    return merged[merged["metric_scenario_id"].notna()].reset_index(drop=True)
 
 
 def summarize_results(eval_df: pd.DataFrame) -> pd.DataFrame:
@@ -365,6 +387,21 @@ def combine_unique_results(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> p
     )
 
 
+def chunk_dataframe(frame: pd.DataFrame, chunk_size: int) -> list[pd.DataFrame]:
+    if frame.empty:
+        return []
+    chunk_size = max(1, int(chunk_size))
+    return [frame.iloc[start : start + chunk_size].copy() for start in range(0, len(frame), chunk_size)]
+
+
+def batch_size_for_round(round_index: int) -> int:
+    if round_index == 0:
+        return RUN_PROFILE["evaluation_batch_size"]
+    if round_index == 1:
+        return RUN_PROFILE["retry_batch_size"]
+    return 1
+
+
 def evaluate_models(
     *,
     stage_name: str,
@@ -393,6 +430,11 @@ def evaluate_models(
             remaining_dataset_df = dataset_df.copy()
             max_rounds = RUN_PROFILE["max_completion_retries"] + 1
             for round_index in range(max_rounds):
+                previous_count = (
+                    int(normalized_df["metric_scenario_id"].nunique())
+                    if not normalized_df.empty
+                    else 0
+                )
                 current_eval_df = remaining_dataset_df[["prompt", "scenario_json", "solution_json"]]
                 if current_eval_df.empty:
                     break
@@ -406,22 +448,48 @@ def evaluate_models(
                     if round_index == 0
                     else RUN_PROFILE["retry_n_jobs"]
                 )
-                with kbench.client.enable_cache():
-                    runs = goalshield_item.evaluate(
-                        llm=[kbench.llms[model_name]],
-                        evaluation_data=current_eval_df,
-                        max_attempts=1,
-                        retry_delay=15,
-                        timeout=timeout,
-                        n_jobs=n_jobs,
-                        remove_run_files=True,
-                        stop_condition=lambda collected_runs: len(collected_runs) == current_eval_df.shape[0],
+                chunk_size = batch_size_for_round(round_index)
+                batch_frames: list[pd.DataFrame] = []
+                for batch_index, batch_df in enumerate(chunk_dataframe(current_eval_df, chunk_size), start=1):
+                    append_progress(
+                        stage=stage_name,
+                        status="running",
+                        detail=f"{dataset_name}: {model_name} batch {batch_index}",
+                        completed_units=progress_state["completed"],
+                        total_units=progress_state["total"],
+                        extra={
+                            "dataset_name": dataset_name,
+                            "model_name": model_name,
+                            "round_index": round_index,
+                            "batch_index": batch_index,
+                            "batch_size": int(batch_df.shape[0]),
+                        },
                     )
-                attempt_df = normalize_runs_dataframe(runs, dataset_df, dataset_name, sweep_name)
-                normalized_df = combine_unique_results(normalized_df, attempt_df)
+                    with kbench.client.enable_cache():
+                        runs = goalshield_item.evaluate(
+                            llm=[kbench.llms[model_name]],
+                            evaluation_data=batch_df,
+                            max_attempts=1,
+                            retry_delay=15,
+                            timeout=timeout,
+                            n_jobs=min(n_jobs, max(1, int(batch_df.shape[0]))),
+                            remove_run_files=True,
+                            stop_condition=lambda collected_runs: len(collected_runs) == batch_df.shape[0],
+                        )
+                    attempt_df = normalize_runs_dataframe(runs, dataset_df, dataset_name, sweep_name)
+                    if not attempt_df.empty:
+                        batch_frames.append(attempt_df)
+                if batch_frames:
+                    normalized_df = combine_unique_results(
+                        normalized_df,
+                        pd.concat(batch_frames, ignore_index=True),
+                    )
                 completed_ids = set(normalized_df["metric_scenario_id"]) if not normalized_df.empty else set()
                 remaining_dataset_df = dataset_df[~dataset_df["scenario_id"].isin(completed_ids)].copy()
                 if remaining_dataset_df.empty:
+                    break
+                current_count = len(completed_ids)
+                if current_count == previous_count and chunk_size == 1:
                     break
                 if round_index < max_rounds - 1:
                     append_progress(
@@ -508,6 +576,11 @@ def evaluate_models(
 
 AVAILABLE_MODEL_NAMES = sorted(getattr(kbench, "llms", {}).keys())
 DEFAULT_MODEL_NAME = getattr(kbench.llm, "name", str(kbench.llm))
+BENCHMARK_MODEL_NAME = (
+    RUN_PROFILE["benchmark_model_name"]
+    if RUN_PROFILE["benchmark_model_name"] in AVAILABLE_MODEL_NAMES
+    else DEFAULT_MODEL_NAME
+)
 CANDIDATE_MODEL_NAMES = ordered_candidate_models(AVAILABLE_MODEL_NAMES)
 if DEFAULT_MODEL_NAME in AVAILABLE_MODEL_NAMES and DEFAULT_MODEL_NAME not in CANDIDATE_MODEL_NAMES:
     CANDIDATE_MODEL_NAMES = [DEFAULT_MODEL_NAME] + CANDIDATE_MODEL_NAMES
@@ -545,6 +618,7 @@ write_json(
     AVAILABLE_MODELS_PATH,
     {
         "default_model": DEFAULT_MODEL_NAME,
+        "benchmark_model": BENCHMARK_MODEL_NAME,
         "available_models": AVAILABLE_MODEL_NAMES,
         "candidate_models": CANDIDATE_MODEL_NAMES,
         "run_profile": RUN_PROFILE,
@@ -576,6 +650,7 @@ append_progress(
 
 RUN_PLAN = {
     "default_model": DEFAULT_MODEL_NAME,
+    "benchmark_model": BENCHMARK_MODEL_NAME,
     "run_profile": RUN_PROFILE,
     "dataset_specs": DATASET_SPECS,
     "primary_models": PRIMARY_MODEL_NAMES,
@@ -662,17 +737,17 @@ benchmark_payload = EVAL_FRAMES["primary"].to_json(orient="records")
 append_progress(
     stage="benchmark",
     status="running",
-    detail=f"Running main benchmark with default model {DEFAULT_MODEL_NAME}",
+    detail=f"Running main benchmark with benchmark model {BENCHMARK_MODEL_NAME}",
     completed_units=PROGRESS_STATE["completed"],
     total_units=PROGRESS_STATE["total"],
 )
-leaderboard_run = goalshield_benchmark.run(kbench.llm, benchmark_payload)
+leaderboard_run = goalshield_benchmark.run(kbench.llms[BENCHMARK_MODEL_NAME], benchmark_payload)
 (WORKDIR / "goalshield_leaderboard_run.txt").write_text(str(leaderboard_run), encoding="utf-8")
 PROGRESS_STATE["completed"] += 1
 append_progress(
     stage="benchmark",
     status="completed",
-    detail=f"Completed main benchmark with default model {DEFAULT_MODEL_NAME}",
+    detail=f"Completed main benchmark with benchmark model {BENCHMARK_MODEL_NAME}",
     completed_units=PROGRESS_STATE["completed"],
     total_units=PROGRESS_STATE["total"],
 )
@@ -757,6 +832,7 @@ summary_lines = [
     "",
     f"- Run profile: `{RUN_PROFILE['name']}`",
     f"- Default benchmark model: `{DEFAULT_MODEL_NAME}`",
+    f"- Benchmark run model: `{BENCHMARK_MODEL_NAME}`",
     f"- Primary models requested: `{len(PRIMARY_MODEL_NAMES)}`",
     f"- Probe models requested: `{len(PROBE_MODEL_NAMES)}`",
     f"- Holdout models requested: `{len(ROBUSTNESS_MODEL_NAMES)}`",
