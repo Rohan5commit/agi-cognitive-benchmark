@@ -43,7 +43,7 @@ PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 RUN_PROFILE = {
     "name": "adaptive_submission",
     "primary_model_count": 4,
-    "healthcheck_model_count": 7,
+    "healthcheck_model_count": 10,
     "probe_model_count": 0,
     "robustness_top_k": 1,
     "benchmark_model_name": "google/gemini-2.0-flash",
@@ -60,18 +60,20 @@ RUN_PROFILE = {
 
 MODEL_PRIORITY = [
     "google/gemini-2.0-flash",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "google/gemini-3-flash-preview",
     "anthropic/claude-haiku-4-5@20251001",
     "anthropic/claude-sonnet-4@20250514",
     "anthropic/claude-opus-4-1@20250805",
-    "google/gemini-3-flash-preview",
-    "google/gemini-2.5-flash",
-    "google/gemini-2.5-pro",
     "google/gemini-2.0-flash-lite",
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-pro-preview",
     "google/gemma-4-31b",
     "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
     "qwen/qwen3-next-80b-a3b-instruct",
+    "qwen/qwen3-coder-480b-a35b-instruct",
 ]
 EXCLUDE_MODEL_TERMS = (
     "embedding",
@@ -432,6 +434,11 @@ def select_primary_models(
         row["model_name"]: row
         for row in health_summary.to_dict(orient="records")
     }
+    denied_models = {
+        name
+        for name, row in health_records.items()
+        if row.get("dominant_error_type") == "PermissionDeniedError"
+    }
 
     ranked = sorted(
         healthcheck_model_names,
@@ -444,8 +451,14 @@ def select_primary_models(
         ),
     )
 
-    selected: list[str] = []
+    selected = [
+        name
+        for name in ranked
+        if int(health_records.get(name, {}).get("parsed", 0)) > 0
+    ]
     for name in ranked + fallback_names:
+        if name in denied_models:
+            continue
         if name in AVAILABLE_MODEL_NAMES and name not in selected:
             selected.append(name)
         if len(selected) >= RUN_PROFILE["primary_model_count"]:
@@ -928,6 +941,8 @@ PRIMARY_EVAL_DF = evaluate_models(
     progress_state=PROGRESS_STATE,
 )
 PRIMARY_SUMMARY = summarize_results(PRIMARY_EVAL_DF)
+PRIMARY_HEALTH_SUMMARY = summarize_response_health(PRIMARY_EVAL_DF)
+PRIMARY_HEALTH_SUMMARY.to_csv(WORKDIR / "goalshield_primary_health_summary.csv", index=False)
 PRIMARY_SUMMARY
 
 # %%
@@ -983,10 +998,13 @@ build_error_profile(PRIMARY_EVAL_DF).to_csv(
     index=False,
 )
 
+benchpress_eligible_models = set(
+    PRIMARY_HEALTH_SUMMARY.loc[PRIMARY_HEALTH_SUMMARY["parsed"] > 0, "model_name"].tolist()
+)
 benchpress_scores = {
     BENCHPRESS_MAP[name]: score * 100.0
     for name, score in PRIMARY_SUMMARY.set_index("model_name")["composite"].to_dict().items()
-    if name in BENCHPRESS_MAP
+    if name in BENCHPRESS_MAP and name in benchpress_eligible_models
 }
 with open(WORKDIR / "goalshield_benchpress_input.json", "w", encoding="utf-8") as handle:
     json.dump(benchpress_scores, handle, indent=2)
@@ -1049,6 +1067,24 @@ append_progress(
 )
 novelty_status: dict[str, object] = {"benchpress_model_count": len(benchpress_scores)}
 if len(benchpress_scores) >= 3:
+    deps_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "scipy",
+            "scikit-learn",
+            "openpyxl",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    novelty_status["deps_returncode"] = deps_result.returncode
+    if deps_result.stderr.strip():
+        novelty_status["deps_stderr_tail"] = deps_result.stderr.strip().splitlines()[-10:]
     install_result = subprocess.run(
         [
             sys.executable,
@@ -1066,7 +1102,7 @@ if len(benchpress_scores) >= 3:
     novelty_status["install_returncode"] = install_result.returncode
     if install_result.stderr.strip():
         novelty_status["install_stderr_tail"] = install_result.stderr.strip().splitlines()[-10:]
-    if install_result.returncode == 0:
+    if deps_result.returncode == 0 and install_result.returncode == 0:
         try:
             from evaluating_agi.benchpress import check_novelty
 
@@ -1075,6 +1111,8 @@ if len(benchpress_scores) >= 3:
             novelty_status["report_written"] = True
         except Exception as exc:
             novelty_status["report_error"] = f"{type(exc).__name__}: {exc}"
+    elif deps_result.returncode != 0:
+        novelty_status["report_error"] = "optional novelty dependencies install failed"
     else:
         novelty_status["report_error"] = "optional novelty package install failed"
 else:

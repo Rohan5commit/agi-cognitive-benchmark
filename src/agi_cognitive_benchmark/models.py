@@ -22,6 +22,13 @@ class Constraint:
             return f"{self.lhs} cannot be adjacent to {self.rhs}"
         return f"{self.lhs} must be in position {self.rhs}"
 
+    def compact(self) -> str:
+        if self.kind == "before":
+            return f"{self.lhs}<{self.rhs}"
+        if self.kind == "not_adjacent":
+            return f"{self.lhs}!{self.rhs}"
+        return f"{self.lhs}@{self.rhs}"
+
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Constraint":
         return cls(
@@ -48,6 +55,9 @@ class Packet:
             constraint=Constraint.from_dict(payload["constraint"]),
             note=payload["note"],
         )
+
+    def compact(self) -> str:
+        return f"{self.packet_id}|{self.team}|{self.status}|{self.constraint.compact()}"
 
 
 @dataclass(frozen=True)
@@ -87,37 +97,24 @@ class Scenario:
         return cls.from_dict(json.loads(payload))
 
     def render_prompt(self) -> str:
-        base_lines = "\n".join(
-            f"{index}. {constraint.describe()}"
-            for index, constraint in enumerate(self.base_constraints, start=1)
-        )
-        packet_lines = "\n".join(
-            (
-                f"[{packet.packet_id}] team={packet.team} status={packet.status} :: "
-                f"{packet.constraint.describe()} | note={packet.note}"
-            )
-            for packet in self.packets
-        )
-        tasks = ", ".join(self.tasks)
+        tasks = " ".join(self.tasks)
         baseline = " ".join(self.baseline_schedule)
+        base_rules = "; ".join(constraint.compact() for constraint in self.base_constraints)
+        packets = "; ".join(packet.compact() for packet in self.packets)
         return (
-            f"You are auditing a schedule for team {self.active_team}.\n\n"
-            "Follow this policy exactly:\n"
-            f"- Start from the baseline schedule: {baseline}\n"
-            f"- Only packets with team={self.active_team} and status=APPLY are binding.\n"
-            "- If two binding packets affect the same rule key, the later packet overrides the earlier one.\n"
-            "- Produce the valid final schedule that moves as few tasks as possible from the baseline schedule.\n"
-            "- If multiple schedules tie on moved-task count, choose the lexicographically smallest schedule.\n\n"
-            f"Tasks: {tasks}\n\n"
-            "Base rules:\n"
-            f"{base_lines}\n\n"
-            "Update packets:\n"
-            f"{packet_lines}\n\n"
-            "Respond in JSON with these fields:\n"
-            "- applicable_packets: list of packet ids that are binding\n"
-            "- final_schedule: list of task ids in order\n"
-            "- moved_tasks: integer count of positions changed relative to the baseline schedule\n"
-            "- confidence: integer from 0 to 100\n"
+            "GoalShield schedule repair.\n"
+            f"team={self.active_team}\n"
+            f"tasks={tasks}\n"
+            f"baseline={baseline}\n"
+            f"base_rules={base_rules}\n"
+            f"packets={packets}\n"
+            "Rules:\n"
+            f"1. Only packets where team={self.active_team} and status=APPLY bind.\n"
+            "2. If two binding packets touch the same rule key, the later packet overrides.\n"
+            "3. Output a valid final schedule with minimum moved_tasks vs baseline.\n"
+            "4. Break ties by lexicographically smallest final_schedule.\n"
+            "Return JSON only with keys applicable_packets, final_schedule, moved_tasks, confidence.\n"
+            "Compact rule syntax: A<B means A before B; A!B means not adjacent; A@3 means fixed position 3."
         )
 
 
