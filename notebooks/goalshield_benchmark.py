@@ -42,11 +42,11 @@ PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
     "name": "adaptive_submission",
-    "primary_model_count": 4,
-    "healthcheck_model_count": 10,
+    "primary_model_count": 3,
+    "healthcheck_model_count": 6,
     "probe_model_count": 0,
     "robustness_top_k": 1,
-    "benchmark_model_name": "google/gemini-2.0-flash",
+    "benchmark_model_name": "google/gemini-2.0-flash-lite",
     "benchmark_n_jobs": 2,
     "evaluation_n_jobs": 2,
     "benchmark_timeout": 180,
@@ -61,14 +61,14 @@ RUN_PROFILE = {
 MODEL_PRIORITY = [
     "google/gemini-2.0-flash",
     "google/gemma-3-27b",
+    "google/gemini-2.5-flash",
+    "google/gemini-3-flash-preview",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.0-flash-lite",
+    "google/gemma-3-12b",
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "deepseek-ai/deepseek-v3.2",
-    "google/gemini-2.0-flash-lite",
-    "google/gemma-3-12b",
-    "google/gemini-2.5-flash",
-    "google/gemini-2.5-pro",
-    "google/gemini-3-flash-preview",
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-pro-preview",
     "anthropic/claude-haiku-4-5@20251001",
@@ -832,7 +832,6 @@ def goalshield_item(llm, prompt: str, scenario_json: str, solution_json: str) ->
     response_error_type = ""
     response_error_message = ""
     with kbench.chats.new(f"goalshield-{scenario.scenario_id}"):
-        kbench.system.send(SYSTEM_PROMPT)
         try:
             raw_answer = llm.prompt(prompt)
             answer = parse_plan_answer_response(raw_answer)

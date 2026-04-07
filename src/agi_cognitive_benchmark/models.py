@@ -102,19 +102,16 @@ class Scenario:
         base_rules = "; ".join(constraint.compact() for constraint in self.base_constraints)
         packets = "; ".join(packet.compact() for packet in self.packets)
         return (
-            "GoalShield schedule repair.\n"
+            "GoalShield.\n"
             f"team={self.active_team}\n"
             f"tasks={tasks}\n"
             f"baseline={baseline}\n"
             f"base_rules={base_rules}\n"
             f"packets={packets}\n"
-            "Rules:\n"
-            f"1. Only packets where team={self.active_team} and status=APPLY bind.\n"
-            "2. If two binding packets touch the same rule key, the later packet overrides.\n"
-            "3. Output a valid final schedule with minimum moved_tasks vs baseline.\n"
-            "4. Break ties by lexicographically smallest final_schedule.\n"
-            "Return JSON only with keys applicable_packets, final_schedule, moved_tasks, confidence.\n"
-            "Compact rule syntax: A<B means A before B; A!B means not adjacent; A@3 means fixed position 3."
+            f"Use only {self.active_team} APPLY packets. Later packet on same rule key overrides earlier.\n"
+            "Return the valid final schedule with minimum moved_tasks vs baseline; tie -> lexicographically smallest schedule.\n"
+            "JSON only: applicable_packets, final_schedule, moved_tasks, confidence.\n"
+            "Rule syntax: A<B before, A!B not-adjacent, A@3 fixed-pos."
         )
 
 
