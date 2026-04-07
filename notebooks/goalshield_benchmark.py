@@ -106,8 +106,9 @@ with kbench.client.enable_cache():
         stop_condition=lambda collected_runs: len(collected_runs) == len(evaluation_models) * EVAL_DF.shape[0],
     )
 model_eval_df = model_runs.as_dataframe()
+model_eval_df["model_name"] = model_eval_df["llm"].map(lambda value: getattr(value, "name", str(value)))
 model_summary = (
-    model_eval_df.groupby("llm_name")
+    model_eval_df.groupby("model_name")
     .agg(
         composite=("result", lambda series: float(series.str.get("composite").mean())),
         schedule_exact=("result", lambda series: float(series.str.get("schedule_exact").mean())),
