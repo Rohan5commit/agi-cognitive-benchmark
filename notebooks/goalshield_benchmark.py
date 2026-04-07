@@ -18,6 +18,7 @@ from io import StringIO
 import json
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -28,7 +29,8 @@ import kaggle_benchmarks as kbench
 
 from agi_cognitive_benchmark.dataset import build_records_dataframe, generate_benchmark_dataset
 from agi_cognitive_benchmark.metrics import score_plan_answer
-from agi_cognitive_benchmark.models import PlanAnswer, Scenario, Solution
+from agi_cognitive_benchmark.models import Scenario, Solution
+from agi_cognitive_benchmark.parsing import parse_plan_answer_response
 
 WORKDIR = Path("/kaggle/working")
 PROGRESS_PATH = WORKDIR / "goalshield_progress.json"
@@ -698,7 +700,7 @@ DATASET_FRAMES["primary"].head(3)
 SYSTEM_PROMPT = """
 You are solving a schedule-repair task.
 Always follow the explicit packet policy in the user prompt.
-Return only the JSON object required by the schema.
+Return only a JSON object with keys applicable_packets, final_schedule, moved_tasks, confidence.
 """
 
 
@@ -706,10 +708,27 @@ Return only the JSON object required by the schema.
 def goalshield_item(llm, prompt: str, scenario_json: str, solution_json: str) -> dict:
     scenario = Scenario.from_json(scenario_json)
     solution = Solution.from_json(solution_json)
+    raw_answer = ""
+    response_status = "parsed"
+    response_error_type = ""
     with kbench.chats.new(f"goalshield-{scenario.scenario_id}"):
         kbench.system.send(SYSTEM_PROMPT)
-        answer = llm.prompt(prompt, schema=PlanAnswer)
-    return score_plan_answer(scenario, solution, answer)
+        try:
+            raw_answer = llm.prompt(prompt)
+            answer = parse_plan_answer_response(raw_answer)
+            if answer is None:
+                response_status = "unparsed"
+        except Exception as exc:
+            answer = None
+            response_status = "error"
+            response_error_type = type(exc).__name__
+            raw_answer = str(exc)
+    result = score_plan_answer(scenario, solution, answer)
+    result["response_status"] = response_status
+    result["response_error_type"] = response_error_type
+    result["response_chars"] = len(raw_answer)
+    result["response_has_json"] = int(bool(re.search(r"```(?:json)?|\\{", raw_answer, re.IGNORECASE)))
+    return result
 
 
 @kbench.task(name="goalshield_benchmark")

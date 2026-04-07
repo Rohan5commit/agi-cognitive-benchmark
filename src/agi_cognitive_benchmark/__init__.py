@@ -7,6 +7,7 @@ from .dataset import (
 from .generator import DIFFICULTY_SPECS, generate_scenario
 from .metrics import score_plan_answer
 from .models import Constraint, Packet, PlanAnswer, Scenario, Solution
+from .parsing import parse_plan_answer_response
 from .solver import solve_scenario
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "PlanAnswer",
     "Scenario",
     "Solution",
+    "parse_plan_answer_response",
     "build_records_dataframe",
     "generate_benchmark_dataset",
     "generate_scenario",
