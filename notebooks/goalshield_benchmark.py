@@ -41,8 +41,9 @@ FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "google_recovery",
+    "name": "adaptive_submission",
     "primary_model_count": 4,
+    "healthcheck_model_count": 7,
     "probe_model_count": 0,
     "robustness_top_k": 1,
     "benchmark_model_name": "google/gemini-2.0-flash",
@@ -59,12 +60,18 @@ RUN_PROFILE = {
 
 MODEL_PRIORITY = [
     "google/gemini-2.0-flash",
+    "anthropic/claude-haiku-4-5@20251001",
+    "anthropic/claude-sonnet-4@20250514",
+    "anthropic/claude-opus-4-1@20250805",
     "google/gemini-3-flash-preview",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.0-flash-lite",
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-pro-preview",
+    "google/gemma-4-31b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-next-80b-a3b-instruct",
 ]
 EXCLUDE_MODEL_TERMS = (
     "embedding",
@@ -101,19 +108,9 @@ BENCHPRESS_MAP = {
     "google/gemini-2.5-flash": "gemini-2.5-flash",
     "google/gemini-2.5-pro": "gemini-2.5-pro",
     "google/gemini-3-flash-preview": "gemini-3-flash",
-    "google/gemini-3-flash": "gemini-3-flash",
-    "google/gemini-3-pro": "gemini-3-pro",
-    "anthropic/claude-sonnet-4": "claude-sonnet-4",
-    "anthropic/claude-opus-4": "claude-opus-4",
+    "anthropic/claude-haiku-4-5@20251001": "claude-haiku-4.5",
+    "anthropic/claude-sonnet-4@20250514": "claude-sonnet-4",
     "anthropic/claude-opus-4-1@20250805": "claude-opus-4",
-    "openai/gpt-4.1": "gpt-4.1",
-    "openai/gpt-4.5": "gpt-4.5",
-    "openai/gpt-5.4-2026-03-05": "gpt-5.4",
-    "openai/gpt-5.4-mini-2026-03-17": "gpt-5.4-mini",
-    "openai/o3": "o3",
-    "openai/o3-mini-high": "o3-mini-high",
-    "meta/llama-4-maverick": "llama-4-maverick",
-    "meta/llama-4-scout": "llama-4-scout",
 }
 PROGRESS_LOG: list[dict[str, object]] = []
 FAILURES: list[dict[str, object]] = []
@@ -378,6 +375,84 @@ def persist_summary_bundle(prefix: str, eval_df: pd.DataFrame) -> None:
     )
 
 
+def summarize_response_health(eval_df: pd.DataFrame) -> pd.DataFrame:
+    if eval_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "model_name",
+                "scenarios",
+                "parsed",
+                "unparsed",
+                "error",
+                "parsed_rate",
+                "mean_composite",
+                "mean_response_chars",
+                "dominant_error_type",
+            ]
+        )
+
+    health_df = eval_df.copy()
+    health_df["parsed"] = health_df["metric_response_status"].eq("parsed").astype(int)
+    health_df["unparsed"] = health_df["metric_response_status"].eq("unparsed").astype(int)
+    health_df["error"] = health_df["metric_response_status"].eq("error").astype(int)
+
+    summary = (
+        health_df.groupby("model_name")
+        .agg(
+            scenarios=("metric_scenario_id", "count"),
+            parsed=("parsed", "sum"),
+            unparsed=("unparsed", "sum"),
+            error=("error", "sum"),
+            parsed_rate=("parsed", "mean"),
+            mean_composite=("metric_composite", "mean"),
+            mean_response_chars=("metric_response_chars", "mean"),
+        )
+        .reset_index()
+    )
+    dominant_error = (
+        health_df[health_df["metric_response_error_type"].astype(str) != ""]
+        .groupby("model_name")["metric_response_error_type"]
+        .agg(lambda values: values.value_counts().index[0])
+        .to_dict()
+    )
+    summary["dominant_error_type"] = summary["model_name"].map(dominant_error).fillna("")
+    return summary.sort_values(
+        ["parsed", "error", "mean_composite", "mean_response_chars"],
+        ascending=[False, True, False, False],
+    ).reset_index(drop=True)
+
+
+def select_primary_models(
+    health_summary: pd.DataFrame,
+    healthcheck_model_names: list[str],
+    fallback_names: list[str],
+) -> list[str]:
+    priority = {name: index for index, name in enumerate(fallback_names)}
+    health_records = {
+        row["model_name"]: row
+        for row in health_summary.to_dict(orient="records")
+    }
+
+    ranked = sorted(
+        healthcheck_model_names,
+        key=lambda name: (
+            -int(health_records.get(name, {}).get("parsed", 0)),
+            int(health_records.get(name, {}).get("error", 999)),
+            -int(name in BENCHPRESS_MAP),
+            -float(health_records.get(name, {}).get("mean_composite", 0.0) or 0.0),
+            priority.get(name, 999),
+        ),
+    )
+
+    selected: list[str] = []
+    for name in ranked + fallback_names:
+        if name in AVAILABLE_MODEL_NAMES and name not in selected:
+            selected.append(name)
+        if len(selected) >= RUN_PROFILE["primary_model_count"]:
+            break
+    return selected
+
+
 def combine_unique_results(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
     frames = [frame for frame in [existing_df, new_df] if not frame.empty]
     if not frames:
@@ -587,29 +662,42 @@ CANDIDATE_MODEL_NAMES = ordered_candidate_models(AVAILABLE_MODEL_NAMES)
 if DEFAULT_MODEL_NAME in AVAILABLE_MODEL_NAMES and DEFAULT_MODEL_NAME not in CANDIDATE_MODEL_NAMES:
     CANDIDATE_MODEL_NAMES = [DEFAULT_MODEL_NAME] + CANDIDATE_MODEL_NAMES
 
-PRIMARY_MODEL_NAMES = CANDIDATE_MODEL_NAMES[: RUN_PROFILE["primary_model_count"]]
+HEALTHCHECK_MODEL_NAMES = [
+    name for name in CANDIDATE_MODEL_NAMES if name in BENCHPRESS_MAP
+][: RUN_PROFILE["healthcheck_model_count"]]
+for name in CANDIDATE_MODEL_NAMES:
+    if len(HEALTHCHECK_MODEL_NAMES) >= RUN_PROFILE["healthcheck_model_count"]:
+        break
+    if name not in HEALTHCHECK_MODEL_NAMES:
+        HEALTHCHECK_MODEL_NAMES.append(name)
+
+PRIMARY_MODEL_NAMES = HEALTHCHECK_MODEL_NAMES[: RUN_PROFILE["primary_model_count"]]
 PROBE_MODEL_NAMES = CANDIDATE_MODEL_NAMES[
     RUN_PROFILE["primary_model_count"] : RUN_PROFILE["primary_model_count"] + RUN_PROFILE["probe_model_count"]
 ]
 ROBUSTNESS_TOP_K = min(RUN_PROFILE["robustness_top_k"], len(PRIMARY_MODEL_NAMES))
 ROBUSTNESS_REQUESTED_MODEL_NAMES = PRIMARY_MODEL_NAMES[:ROBUSTNESS_TOP_K]
+HEALTHCHECK_SCENARIOS = 3
 PRIMARY_SCENARIOS = sum(DATASET_SPECS["primary"]["counts"].values())
 PROBE_SCENARIOS = sum(DATASET_SPECS["probe"]["counts"].values())
 HOLDOUT_SCENARIOS = sum(DATASET_SPECS["holdout"]["counts"].values())
 ESTIMATED_TOTAL_CALLS = (
     PRIMARY_SCENARIOS
-    + PRIMARY_SCENARIOS * len(PRIMARY_MODEL_NAMES)
+    + HEALTHCHECK_SCENARIOS * len(HEALTHCHECK_MODEL_NAMES)
+    + PRIMARY_SCENARIOS * RUN_PROFILE["primary_model_count"]
     + PROBE_SCENARIOS * len(PROBE_MODEL_NAMES)
-    + HOLDOUT_SCENARIOS * len(ROBUSTNESS_REQUESTED_MODEL_NAMES)
+    + HOLDOUT_SCENARIOS * RUN_PROFILE["robustness_top_k"]
 )
 
 TOTAL_PROGRESS_UNITS = (
     1
     + len(DATASET_SPECS)
+    + len(HEALTHCHECK_MODEL_NAMES)
     + 1
-    + len(PRIMARY_MODEL_NAMES)
+    + RUN_PROFILE["primary_model_count"]
     + len(PROBE_MODEL_NAMES)
-    + ROBUSTNESS_TOP_K
+    + RUN_PROFILE["robustness_top_k"]
+    + 1
     + 1
 )
 PROGRESS_STATE = {"completed": 0, "total": TOTAL_PROGRESS_UNITS}
@@ -623,6 +711,7 @@ write_json(
         "benchmark_model": BENCHMARK_MODEL_NAME,
         "available_models": AVAILABLE_MODEL_NAMES,
         "candidate_models": CANDIDATE_MODEL_NAMES,
+        "healthcheck_models": HEALTHCHECK_MODEL_NAMES,
         "run_profile": RUN_PROFILE,
         "primary_models": PRIMARY_MODEL_NAMES,
         "probe_models": PROBE_MODEL_NAMES,
@@ -655,6 +744,7 @@ RUN_PLAN = {
     "benchmark_model": BENCHMARK_MODEL_NAME,
     "run_profile": RUN_PROFILE,
     "dataset_specs": DATASET_SPECS,
+    "healthcheck_models": HEALTHCHECK_MODEL_NAMES,
     "primary_models": PRIMARY_MODEL_NAMES,
     "probe_models": PROBE_MODEL_NAMES,
     "robustness_requested_models": ROBUSTNESS_REQUESTED_MODEL_NAMES,
@@ -694,6 +784,15 @@ for dataset_name, spec in DATASET_SPECS.items():
             "difficulty_counts": dataset_df["difficulty"].value_counts().to_dict(),
         },
     )
+HEALTHCHECK_DATASET_DF = (
+    DATASET_FRAMES["primary"]
+    .sort_values(["difficulty", "scenario_id"])
+    .groupby("difficulty", group_keys=False)
+    .head(1)
+    .reset_index(drop=True)
+)
+EVAL_FRAMES["healthcheck"] = HEALTHCHECK_DATASET_DF[["prompt", "scenario_json", "solution_json"]].copy()
+HEALTHCHECK_DATASET_DF.to_csv(WORKDIR / "goalshield_dataset_healthcheck.csv", index=False)
 DATASET_FRAMES["primary"].head(3)
 
 # %%
@@ -711,6 +810,7 @@ def goalshield_item(llm, prompt: str, scenario_json: str, solution_json: str) ->
     raw_answer = ""
     response_status = "parsed"
     response_error_type = ""
+    response_error_message = ""
     with kbench.chats.new(f"goalshield-{scenario.scenario_id}"):
         kbench.system.send(SYSTEM_PROMPT)
         try:
@@ -722,10 +822,12 @@ def goalshield_item(llm, prompt: str, scenario_json: str, solution_json: str) ->
             answer = None
             response_status = "error"
             response_error_type = type(exc).__name__
+            response_error_message = str(exc)
             raw_answer = str(exc)
     result = score_plan_answer(scenario, solution, answer)
     result["response_status"] = response_status
     result["response_error_type"] = response_error_type
+    result["response_error_message"] = response_error_message
     result["response_chars"] = len(raw_answer)
     result["response_has_json"] = int(bool(re.search(r"```(?:json)?|\\{", raw_answer, re.IGNORECASE)))
     return result
@@ -750,6 +852,49 @@ def goalshield_benchmark(llm, evaluation_df_json: str) -> tuple[float, float]:
         float(eval_df.result.str.get("composite").mean()),
         float(eval_df.result.str.get("composite").std(ddof=0)),
     )
+
+# %%
+HEALTHCHECK_EVAL_DF = evaluate_models(
+    stage_name="healthcheck",
+    sweep_name="healthcheck",
+    model_names=HEALTHCHECK_MODEL_NAMES,
+    evaluation_df=EVAL_FRAMES["healthcheck"],
+    dataset_df=HEALTHCHECK_DATASET_DF,
+    dataset_name="healthcheck",
+    progress_state=PROGRESS_STATE,
+)
+HEALTHCHECK_SUMMARY = summarize_response_health(HEALTHCHECK_EVAL_DF)
+HEALTHCHECK_SUMMARY.to_csv(WORKDIR / "goalshield_healthcheck_summary.csv", index=False)
+PRIMARY_MODEL_NAMES = select_primary_models(
+    HEALTHCHECK_SUMMARY,
+    HEALTHCHECK_MODEL_NAMES,
+    CANDIDATE_MODEL_NAMES,
+)
+ROBUSTNESS_TOP_K = min(RUN_PROFILE["robustness_top_k"], len(PRIMARY_MODEL_NAMES))
+ROBUSTNESS_REQUESTED_MODEL_NAMES = PRIMARY_MODEL_NAMES[:ROBUSTNESS_TOP_K]
+write_json(
+    AVAILABLE_MODELS_PATH,
+    {
+        "default_model": DEFAULT_MODEL_NAME,
+        "benchmark_model": BENCHMARK_MODEL_NAME,
+        "available_models": AVAILABLE_MODEL_NAMES,
+        "candidate_models": CANDIDATE_MODEL_NAMES,
+        "healthcheck_models": HEALTHCHECK_MODEL_NAMES,
+        "healthcheck_selected_primary_models": PRIMARY_MODEL_NAMES,
+        "run_profile": RUN_PROFILE,
+        "primary_models": PRIMARY_MODEL_NAMES,
+        "probe_models": PROBE_MODEL_NAMES,
+    },
+)
+RUN_PLAN.update(
+    {
+        "healthcheck_models": HEALTHCHECK_MODEL_NAMES,
+        "selected_primary_models": PRIMARY_MODEL_NAMES,
+        "robustness_requested_models": ROBUSTNESS_REQUESTED_MODEL_NAMES,
+    }
+)
+write_json(RUN_PLAN_PATH, RUN_PLAN)
+HEALTHCHECK_SUMMARY
 
 # %%
 benchmark_payload = EVAL_FRAMES["primary"].to_json(orient="records")
@@ -852,12 +997,14 @@ summary_lines = [
     f"- Run profile: `{RUN_PROFILE['name']}`",
     f"- Default benchmark model: `{DEFAULT_MODEL_NAME}`",
     f"- Benchmark run model: `{BENCHMARK_MODEL_NAME}`",
+    f"- Healthcheck models requested: `{len(HEALTHCHECK_MODEL_NAMES)}`",
     f"- Primary models requested: `{len(PRIMARY_MODEL_NAMES)}`",
     f"- Probe models requested: `{len(PROBE_MODEL_NAMES)}`",
     f"- Holdout models requested: `{len(ROBUSTNESS_MODEL_NAMES)}`",
     f"- Estimated total model calls: `{ESTIMATED_TOTAL_CALLS}`",
     f"- Failures captured: `{len(FAILURES)}`",
     f"- Partial models excluded: `{len(PARTIAL_MODELS)}`",
+    f"- Selected primary models: `{', '.join(PRIMARY_MODEL_NAMES)}`",
 ]
 if not PRIMARY_SUMMARY.empty:
     top_row = PRIMARY_SUMMARY.iloc[0]
@@ -909,6 +1056,7 @@ if len(benchpress_scores) >= 3:
             "pip",
             "install",
             "-q",
+            "--no-deps",
             "https://github.com/kafkasl/evaluating-agi/archive/refs/heads/main.zip",
         ],
         capture_output=True,
