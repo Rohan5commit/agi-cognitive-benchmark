@@ -60,18 +60,21 @@ RUN_PROFILE = {
 
 MODEL_PRIORITY = [
     "google/gemini-2.0-flash",
+    "google/gemma-3-27b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "deepseek-ai/deepseek-v3.2",
+    "google/gemini-2.0-flash-lite",
+    "google/gemma-3-12b",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-pro",
     "google/gemini-3-flash-preview",
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3.1-pro-preview",
     "anthropic/claude-haiku-4-5@20251001",
     "anthropic/claude-sonnet-4@20250514",
     "anthropic/claude-opus-4-1@20250805",
-    "google/gemini-2.0-flash-lite",
-    "google/gemini-3.1-flash-lite-preview",
-    "google/gemini-3.1-pro-preview",
     "google/gemma-4-31b",
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-coder-480b-a35b-instruct",
 ]
@@ -107,6 +110,10 @@ DATASET_SPECS = {
 }
 BENCHPRESS_MAP = {
     "google/gemini-2.0-flash": "gemini-2.0-flash",
+    "google/gemma-3-27b": "gemma-3-27b",
+    "openai/gpt-oss-20b": "gpt-oss-20b",
+    "openai/gpt-oss-120b": "gpt-oss-120b",
+    "deepseek-ai/deepseek-v3.2": "deepseek-v3.2",
     "google/gemini-2.5-flash": "gemini-2.5-flash",
     "google/gemini-2.5-pro": "gemini-2.5-pro",
     "google/gemini-3-flash-preview": "gemini-3-flash",
