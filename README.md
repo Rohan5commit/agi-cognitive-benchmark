@@ -127,11 +127,14 @@ The notebook:
 
 - installs `kaggle-benchmarks`,
 - installs this repo directly from GitHub,
-- materializes the full GoalShield dataset,
-- runs the main `goalshield_benchmark` task,
-- evaluates available frontier models,
-- writes `goalshield_model_summary.csv` to `/kaggle/working`,
-- runs BenchPress novelty analysis when at least 3 mapped models are available.
+- requests a Kaggle GPU runtime while spending the competition quota through hosted `kaggle-benchmarks` model calls,
+- materializes three dataset slices (`primary`, `probe`, `holdout`),
+- runs the main `goalshield_benchmark` task on the primary slice,
+- sweeps an aggressive frontier-model slate on the primary slice,
+- uses the probe slice for extra model breadth and the holdout slice for top-model robustness,
+- writes live progress updates to `/kaggle/working/goalshield_progress.json`,
+- exports per-model, per-difficulty, per-family, and error-profile CSVs to `/kaggle/working`,
+- attempts BenchPress novelty analysis when at least 3 mapped models are available.
 
 ## References
 

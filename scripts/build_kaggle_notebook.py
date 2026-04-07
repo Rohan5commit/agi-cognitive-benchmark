@@ -62,7 +62,7 @@ def write_metadata(
         "language": "python",
         "kernel_type": "notebook",
         "is_private": is_private,
-        "enable_gpu": False,
+        "enable_gpu": True,
         "enable_tpu": False,
         "enable_internet": True,
         "dataset_sources": [],

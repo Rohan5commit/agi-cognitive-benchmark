@@ -59,7 +59,7 @@ The implementation has four key components:
 - A **scenario generator** that constructs baseline schedules, rule streams, distractor packets, and difficulty-controlled repair targets.
 - An **exact symbolic solver** that enumerates all schedules and computes the gold answer.
 - A **grading function** that scores schedule exact match, packet-selection F1, and moved-task accuracy.
-- A **Kaggle Benchmarks notebook** that imports the benchmark directly from GitHub, runs the benchmark through the `kaggle-benchmarks` SDK, and exports model summaries plus a BenchPress novelty report.
+- A **Kaggle Benchmarks notebook** that imports the benchmark directly from GitHub, runs a staged frontier-model sweep through the `kaggle-benchmarks` SDK, logs phase progress to `/kaggle/working/goalshield_progress.json`, and exports overall, per-difficulty, per-family, error-profile, and BenchPress novelty artifacts.
 
 The leaderboard metric is a weighted composite:
 
@@ -89,7 +89,7 @@ The central hypothesis for frontier-model runs is:
 - stronger reasoning models will recover packet selection more reliably but may still over-edit the plan, exposing a gap between rule tracking and revision economy;
 - this creates a profile not captured by standard planning or attention-only benchmarks, because success requires jointly solving rule filtering, rule switching, and minimum-edit repair.
 
-The attached Kaggle notebook is configured to run available frontier models and export `goalshield_model_summary.csv` plus `goalshield_benchpress_report.json`. Those benchmark-run outputs should be inserted into the final submitted writeup once the Kaggle model sweep finishes.
+The attached Kaggle notebook is configured to run a broad frontier-model sweep and export `goalshield_model_summary.csv`, `goalshield_difficulty_summary.csv`, `goalshield_family_summary.csv`, `goalshield_error_profile.csv`, and `goalshield_benchpress_report.json` when BenchPress can be computed. Those benchmark-run outputs should be inserted into the final submitted writeup once the Kaggle model sweep finishes.
 
 ### Organizational Affiliations
 
