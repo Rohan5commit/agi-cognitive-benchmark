@@ -41,34 +41,34 @@ FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "adaptive_submission",
+    "name": "quota_recovery_submission",
     "primary_model_count": 3,
-    "healthcheck_model_count": 6,
+    "healthcheck_model_count": 4,
     "probe_model_count": 0,
-    "robustness_top_k": 1,
+    "robustness_top_k": 0,
     "benchmark_model_name": "google/gemini-2.0-flash-lite",
-    "benchmark_n_jobs": 2,
-    "evaluation_n_jobs": 2,
+    "benchmark_n_jobs": 1,
+    "evaluation_n_jobs": 1,
     "benchmark_timeout": 180,
     "evaluation_timeout": 240,
     "retry_n_jobs": 1,
     "retry_timeout": 420,
-    "max_completion_retries": 6,
-    "evaluation_batch_size": 6,
-    "retry_batch_size": 3,
+    "max_completion_retries": 2,
+    "evaluation_batch_size": 1,
+    "retry_batch_size": 1,
 }
 
 MODEL_PRIORITY = [
-    "google/gemini-2.0-flash",
     "google/gemma-3-27b",
+    "google/gemini-2.0-flash",
+    "openai/gpt-oss-20b",
     "google/gemini-2.5-flash",
     "google/gemini-3-flash-preview",
     "google/gemini-2.5-pro",
-    "google/gemini-2.0-flash-lite",
-    "google/gemma-3-12b",
-    "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "deepseek-ai/deepseek-v3.2",
+    "google/gemini-2.0-flash-lite",
+    "google/gemma-3-12b",
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-pro-preview",
     "anthropic/claude-haiku-4-5@20251001",
@@ -94,8 +94,8 @@ EXCLUDE_MODEL_TERMS = (
 DATASET_SPECS = {
     "primary": {
         "seed": 20260406,
-        "counts": {"easy": 18, "medium": 18, "hard": 18},
-        "description": "Main benchmark slice used for the Kaggle benchmark entity.",
+        "counts": {"easy": 6, "medium": 6, "hard": 6},
+        "description": "Quota-recovery slice used to recover multi-model evidence under Kaggle budget limits.",
     },
     "probe": {
         "seed": 20260407,
@@ -436,7 +436,8 @@ def select_primary_models(
     healthcheck_model_names: list[str],
     fallback_names: list[str],
 ) -> list[str]:
-    priority = {name: index for index, name in enumerate(fallback_names)}
+    mapped_fallback_names = [name for name in fallback_names if name in BENCHPRESS_MAP]
+    priority = {name: index for index, name in enumerate(mapped_fallback_names)}
     health_records = {
         row["model_name"]: row
         for row in health_summary.to_dict(orient="records")
@@ -463,14 +464,33 @@ def select_primary_models(
         for name in ranked
         if int(health_records.get(name, {}).get("parsed", 0)) > 0
     ]
-    for name in ranked + fallback_names:
+    for name in ranked + mapped_fallback_names:
         if name in denied_models:
             continue
-        if name in AVAILABLE_MODEL_NAMES and name not in selected:
+        if name in AVAILABLE_MODEL_NAMES and name in BENCHPRESS_MAP and name not in selected:
             selected.append(name)
         if len(selected) >= RUN_PROFILE["primary_model_count"]:
             break
     return selected
+
+
+def build_benchpress_scores(
+    *,
+    summary_df: pd.DataFrame,
+    health_df: pd.DataFrame,
+    score_column: str,
+) -> dict[str, float]:
+    if summary_df.empty or health_df.empty:
+        return {}
+    eligible_models = set(
+        health_df.loc[health_df["parsed"] > 0, "model_name"].tolist()
+    )
+    score_map = summary_df.set_index("model_name")[score_column].to_dict()
+    return {
+        BENCHPRESS_MAP[name]: float(score_map[name]) * 100.0
+        for name in summary_df["model_name"].tolist()
+        if name in BENCHPRESS_MAP and name in eligible_models and name in score_map
+    }
 
 
 def combine_unique_results(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
@@ -1004,16 +1024,28 @@ build_error_profile(PRIMARY_EVAL_DF).to_csv(
     index=False,
 )
 
-benchpress_eligible_models = set(
-    PRIMARY_HEALTH_SUMMARY.loc[PRIMARY_HEALTH_SUMMARY["parsed"] > 0, "model_name"].tolist()
+primary_benchpress_scores = build_benchpress_scores(
+    summary_df=PRIMARY_SUMMARY,
+    health_df=PRIMARY_HEALTH_SUMMARY,
+    score_column="composite",
 )
-benchpress_scores = {
-    BENCHPRESS_MAP[name]: score * 100.0
-    for name, score in PRIMARY_SUMMARY.set_index("model_name")["composite"].to_dict().items()
-    if name in BENCHPRESS_MAP and name in benchpress_eligible_models
-}
+healthcheck_benchpress_scores = build_benchpress_scores(
+    summary_df=HEALTHCHECK_SUMMARY.rename(columns={"mean_composite": "composite"}),
+    health_df=HEALTHCHECK_SUMMARY,
+    score_column="composite",
+)
+benchpress_source = "primary" if len(primary_benchpress_scores) >= 3 else "healthcheck"
+benchpress_scores = (
+    primary_benchpress_scores
+    if benchpress_source == "primary"
+    else healthcheck_benchpress_scores
+)
 with open(WORKDIR / "goalshield_benchpress_input.json", "w", encoding="utf-8") as handle:
     json.dump(benchpress_scores, handle, indent=2)
+with open(WORKDIR / "goalshield_benchpress_primary_input.json", "w", encoding="utf-8") as handle:
+    json.dump(primary_benchpress_scores, handle, indent=2)
+with open(WORKDIR / "goalshield_benchpress_healthcheck_input.json", "w", encoding="utf-8") as handle:
+    json.dump(healthcheck_benchpress_scores, handle, indent=2)
 
 summary_lines = [
     "# GoalShield Kaggle Run Summary",
@@ -1029,6 +1061,8 @@ summary_lines = [
     f"- Failures captured: `{len(FAILURES)}`",
     f"- Partial models excluded: `{len(PARTIAL_MODELS)}`",
     f"- Selected primary models: `{', '.join(PRIMARY_MODEL_NAMES)}`",
+    f"- BenchPress score source: `{benchpress_source}`",
+    f"- BenchPress mapped model count: `{len(benchpress_scores)}`",
 ]
 if not PRIMARY_SUMMARY.empty:
     top_row = PRIMARY_SUMMARY.iloc[0]
@@ -1072,6 +1106,9 @@ append_progress(
     total_units=PROGRESS_STATE["total"],
 )
 novelty_status: dict[str, object] = {"benchpress_model_count": len(benchpress_scores)}
+novelty_status["benchpress_source"] = benchpress_source
+novelty_status["primary_benchpress_model_count"] = len(primary_benchpress_scores)
+novelty_status["healthcheck_benchpress_model_count"] = len(healthcheck_benchpress_scores)
 if len(benchpress_scores) >= 3:
     deps_result = subprocess.run(
         [
