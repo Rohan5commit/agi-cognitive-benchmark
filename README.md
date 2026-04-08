@@ -64,7 +64,7 @@ This keeps the benchmark sensitive even when a model is close but not exact.
 
 ## Baseline Signal
 
-The repo includes deterministic heuristic baselines in [results/heuristic_summary_overall.csv](/Users/rohan/agi-cognitive-benchmark/results/heuristic_summary_overall.csv).
+The repo includes deterministic heuristic baselines in [results/heuristic_summary_overall.csv](results/heuristic_summary_overall.csv).
 
 | Policy | Schedule Exact | Packet F1 | Composite |
 | --- | ---: | ---: | ---: |
@@ -76,18 +76,49 @@ The repo includes deterministic heuristic baselines in [results/heuristic_summar
 
 The important pattern is that the strongest naive baseline is **not** the one that ignores updates. It is the one that follows the most recent visible packet. That is exactly the executive-control signature GoalShield is meant to discriminate.
 
+## Latest Kaggle Evidence
+
+The latest successful Kaggle Benchmarks run is archived in [results/kaggle_v20](results/kaggle_v20). This was a **quota-constrained novelty-harvest run**: a one-scenario mapped-model comparison used to validate BenchPress compatibility and extract a clean cross-model signal without burning more hosted quota on failed sweeps.
+
+Primary mapped-model comparison from that run:
+
+| Model | Composite | Note |
+| --- | ---: | --- |
+| `google/gemini-2.5-pro` | 0.90 | perfect schedule and packet selection on the sampled item |
+| `google/gemini-3-flash-preview` | 0.90 | matched `gemini-2.5-pro` on the sampled item |
+| `google/gemini-2.5-flash` | 0.85 | perfect schedule, but weaker packet-selection signal |
+
+The same run also wrote a valid BenchPress novelty report in [results/kaggle_v20/goalshield_benchpress_report.json](results/kaggle_v20/goalshield_benchpress_report.json) from:
+
+```json
+{
+  "gemini-2.5-pro": 90.0,
+  "gemini-3-flash": 90.0,
+  "gemini-2.5-flash": 85.0
+}
+```
+
+BenchPress summary:
+
+- `median_error = 3.42`
+- `gemini-2.5-pro` scored `+3.42` above the BenchPress estimate
+- `gemini-3-flash` was close to the BenchPress estimate (`+0.16`)
+- `gemini-2.5-flash` scored `-5.00` below the BenchPress estimate
+
+Interpretation: even on a compact executive-control task, closely related frontier models separate on **rule filtering and minimal-repair discipline**, not just generic reasoning strength. This run is directional rather than final leaderboard evidence, but it confirms GoalShield can produce a clean, mapped multi-model signal inside Kaggle.
+
 ## Repository Layout
 
 | Path | Purpose |
 | --- | --- |
-| [src/agi_cognitive_benchmark](/Users/rohan/agi-cognitive-benchmark/src/agi_cognitive_benchmark) | scenario schema, generator, solver, scoring, baselines |
-| [data/goalshield_v1_pilot.jsonl](/Users/rohan/agi-cognitive-benchmark/data/goalshield_v1_pilot.jsonl) | small smoke-test dataset |
-| [data/goalshield_v1_full.jsonl](/Users/rohan/agi-cognitive-benchmark/data/goalshield_v1_full.jsonl) | full v1 benchmark dataset |
-| [notebooks/goalshield_benchmark.py](/Users/rohan/agi-cognitive-benchmark/notebooks/goalshield_benchmark.py) | Kaggle notebook source in `py:percent` format |
-| [scripts/build_kaggle_notebook.py](/Users/rohan/agi-cognitive-benchmark/scripts/build_kaggle_notebook.py) | converts the notebook source to a Kaggle-pushable `.ipynb` |
-| [scripts/publish_kaggle_notebook.py](/Users/rohan/agi-cognitive-benchmark/scripts/publish_kaggle_notebook.py) | builds and pushes the Kaggle notebook |
-| [writeup/draft.md](/Users/rohan/agi-cognitive-benchmark/writeup/draft.md) | competition writeup draft |
-| [results/heuristic_baselines_full.csv](/Users/rohan/agi-cognitive-benchmark/results/heuristic_baselines_full.csv) | per-task heuristic outputs |
+| [src/agi_cognitive_benchmark](src/agi_cognitive_benchmark) | scenario schema, generator, solver, scoring, baselines |
+| [data/goalshield_v1_pilot.jsonl](data/goalshield_v1_pilot.jsonl) | small smoke-test dataset |
+| [data/goalshield_v1_full.jsonl](data/goalshield_v1_full.jsonl) | full v1 benchmark dataset |
+| [notebooks/goalshield_benchmark.py](notebooks/goalshield_benchmark.py) | Kaggle notebook source in `py:percent` format |
+| [scripts/build_kaggle_notebook.py](scripts/build_kaggle_notebook.py) | converts the notebook source to a Kaggle-pushable `.ipynb` |
+| [scripts/publish_kaggle_notebook.py](scripts/publish_kaggle_notebook.py) | builds and pushes the Kaggle notebook |
+| [writeup/draft.md](writeup/draft.md) | competition writeup draft |
+| [results/heuristic_baselines_full.csv](results/heuristic_baselines_full.csv) | per-task heuristic outputs |
 
 ## Local Workflow
 
@@ -128,10 +159,9 @@ The notebook:
 - installs `kaggle-benchmarks`,
 - installs this repo directly from GitHub,
 - requests a Kaggle GPU runtime while spending the competition quota through hosted `kaggle-benchmarks` model calls,
-- materializes three dataset slices (`primary`, `probe`, `holdout`),
+- materializes profile-specific dataset slices (`primary`, `probe`, `holdout`),
 - runs the main `goalshield_benchmark` task on the primary slice,
-- sweeps an aggressive frontier-model slate on the primary slice,
-- uses the probe slice for extra model breadth and the holdout slice for top-model robustness,
+- supports both broad frontier sweeps and quota-constrained novelty-harvest profiles,
 - writes live progress updates to `/kaggle/working/goalshield_progress.json`,
 - exports per-model, per-difficulty, per-family, and error-profile CSVs to `/kaggle/working`,
 - attempts BenchPress novelty analysis when at least 3 mapped models are available.

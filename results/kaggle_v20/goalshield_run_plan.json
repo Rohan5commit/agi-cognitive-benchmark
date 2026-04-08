@@ -1,0 +1,77 @@
+{
+  "benchmark_model": "google/gemini-2.0-flash-lite",
+  "dataset_specs": {
+    "holdout": {
+      "counts": {
+        "easy": 0,
+        "hard": 0,
+        "medium": 0
+      },
+      "description": "Disabled during novelty-harvest runs.",
+      "seed": 20260408
+    },
+    "primary": {
+      "counts": {
+        "easy": 1,
+        "hard": 0,
+        "medium": 0
+      },
+      "description": "Single-scenario slice used to harvest novelty coverage under tight Kaggle quota limits.",
+      "seed": 20260406
+    },
+    "probe": {
+      "counts": {
+        "easy": 0,
+        "hard": 0,
+        "medium": 0
+      },
+      "description": "Disabled during novelty-harvest runs.",
+      "seed": 20260407
+    }
+  },
+  "default_model": "google/gemini-2.5-flash",
+  "estimated_total_calls": 37,
+  "healthcheck_models": [
+    "google/gemma-3-27b",
+    "google/gemini-2.0-flash",
+    "google/gemini-2.5-flash",
+    "google/gemini-3-flash-preview",
+    "google/gemini-2.5-pro",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "deepseek-ai/deepseek-v3.2",
+    "anthropic/claude-haiku-4-5@20251001",
+    "anthropic/claude-sonnet-4@20250514",
+    "anthropic/claude-opus-4-1@20250805"
+  ],
+  "primary_models": [
+    "google/gemma-3-27b",
+    "google/gemini-2.0-flash",
+    "google/gemini-2.5-flash"
+  ],
+  "probe_models": [],
+  "robustness_requested_models": [],
+  "run_profile": {
+    "benchmark_model_name": "google/gemini-2.0-flash-lite",
+    "benchmark_n_jobs": 1,
+    "benchmark_timeout": 180,
+    "evaluation_batch_size": 1,
+    "evaluation_n_jobs": 1,
+    "evaluation_timeout": 240,
+    "healthcheck_model_count": 11,
+    "max_completion_retries": 2,
+    "name": "novelty_harvest",
+    "primary_model_count": 3,
+    "probe_model_count": 0,
+    "retry_batch_size": 1,
+    "retry_n_jobs": 1,
+    "retry_timeout": 420,
+    "robustness_top_k": 0
+  },
+  "selected_primary_models": [
+    "google/gemini-2.5-flash",
+    "google/gemini-3-flash-preview",
+    "google/gemini-2.5-pro"
+  ],
+  "total_progress_units": 21
+}

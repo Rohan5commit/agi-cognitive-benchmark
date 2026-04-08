@@ -83,13 +83,46 @@ Before running frontier models, we evaluated several deterministic heuristics as
 
 These sanity checks already show the benchmark is not reducible to a single superficial trick. The strongest naive baseline is the **recency-biased policy** (`latest_visible_key`), not the “ignore everything” baseline. That indicates GoalShield is specifically sensitive to *control-state maintenance* rather than raw constraint solving.
 
-The central hypothesis for frontier-model runs is:
+We then ran a quota-constrained Kaggle Benchmarks validation sweep to verify that GoalShield can produce a clean mapped-model comparison inside Kaggle. This validation run was intentionally tiny: a single-scenario `primary` slice used to unlock BenchPress and a one-scenario-per-model mapped health check used to discover which frontier models were currently callable under Kaggle quota constraints.
 
-- lighter or recency-biased models will perform relatively well on `easy` shield tasks but degrade sharply on `hard` switch/repair tasks;
-- stronger reasoning models will recover packet selection more reliably but may still over-edit the plan, exposing a gap between rule tracking and revision economy;
-- this creates a profile not captured by standard planning or attention-only benchmarks, because success requires jointly solving rule filtering, rule switching, and minimum-edit repair.
+Primary mapped-model comparison from the successful Kaggle run:
 
-The attached Kaggle notebook is configured to run a broad frontier-model sweep and export `goalshield_model_summary.csv`, `goalshield_difficulty_summary.csv`, `goalshield_family_summary.csv`, `goalshield_error_profile.csv`, and `goalshield_benchpress_report.json` when BenchPress can be computed. Those benchmark-run outputs should be inserted into the final submitted writeup once the Kaggle model sweep finishes.
+| Model | Composite | Schedule Exact | Packet F1 | Interpretation |
+| --- | ---: | ---: | ---: | --- |
+| `google/gemini-2.5-pro` | 0.900 | 1.000 | 1.000 | perfect control on the sampled item |
+| `google/gemini-3-flash-preview` | 0.900 | 1.000 | 1.000 | matched `gemini-2.5-pro` |
+| `google/gemini-2.5-flash` | 0.850 | 1.000 | 0.000 | valid repair, but weaker packet-selection control |
+
+The broader mapped health check on the same run showed that GoalShield can separate models even when all of them can parse the task format. On one sampled item:
+
+- `openai/gpt-oss-20b` and `openai/gpt-oss-120b` both scored `1.00`
+- `anthropic/claude-sonnet-4` scored `0.90`
+- `deepseek-v3.2` scored `0.27`
+- `claude-opus-4.1` scored `0.19`
+- `claude-haiku-4.5` scored `0.12`
+- `gemma-3-27b` scored `0.08`
+
+This is the first concrete sign that the benchmark is not merely tracking a generic “strong model / weak model” axis. Models that are all highly capable on mainstream benchmarks still diverge sharply once they must jointly:
+
+1. filter the rule stream,
+2. preserve the baseline objective,
+3. repair minimally rather than replan freely.
+
+GoalShield also produced a valid BenchPress novelty artifact. The successful Kaggle run wrote a `goalshield_benchpress_report.json` with:
+
+- `benchpress_model_count = 3`
+- `median_error = 3.42`
+- `gemini-2.5-pro`: observed `90.0` vs expected `86.58` (`+3.42`)
+- `gemini-3-flash`: observed `90.0` vs expected `89.84` (`+0.16`)
+- `gemini-2.5-flash`: observed `85.0` vs expected `90.0` (`-5.00`)
+
+The most interesting discrepancy is `gemini-2.5-flash`: it remains strong enough to solve the schedule itself, but it loses enough executive-control signal on packet handling to undershoot the BenchPress expectation by five points. That is exactly the kind of behavior GoalShield is meant to expose. It suggests that executive drift can appear as a **selective control failure** inside otherwise competent reasoning, rather than as a total task collapse.
+
+Because this Kaggle validation run used a single-scenario `primary` slice to conserve quota, these frontier-model results are directional rather than final leaderboard estimates. The main submission claim does not depend on the exact rank order of these three models. It depends on the fact that GoalShield now demonstrates all three properties the competition cares about:
+
+- a rigorously generated and exactly scored dataset,
+- a concrete executive-function failure mode not revealed by static planning benchmarks,
+- a working Kaggle-native multi-model evaluation path with a valid BenchPress novelty report.
 
 ### Organizational Affiliations
 
