@@ -41,9 +41,9 @@ FAILURES_PATH = WORKDIR / "goalshield_failures.json"
 PARTIALS_PATH = WORKDIR / "goalshield_partial_models.json"
 
 RUN_PROFILE = {
-    "name": "quota_recovery_submission",
+    "name": "novelty_harvest",
     "primary_model_count": 3,
-    "healthcheck_model_count": 4,
+    "healthcheck_model_count": 11,
     "probe_model_count": 0,
     "robustness_top_k": 0,
     "benchmark_model_name": "google/gemini-2.0-flash-lite",
@@ -61,19 +61,19 @@ RUN_PROFILE = {
 MODEL_PRIORITY = [
     "google/gemma-3-27b",
     "google/gemini-2.0-flash",
-    "openai/gpt-oss-20b",
     "google/gemini-2.5-flash",
     "google/gemini-3-flash-preview",
     "google/gemini-2.5-pro",
+    "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "deepseek-ai/deepseek-v3.2",
+    "anthropic/claude-haiku-4-5@20251001",
+    "anthropic/claude-sonnet-4@20250514",
+    "anthropic/claude-opus-4-1@20250805",
     "google/gemini-2.0-flash-lite",
     "google/gemma-3-12b",
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-pro-preview",
-    "anthropic/claude-haiku-4-5@20251001",
-    "anthropic/claude-sonnet-4@20250514",
-    "anthropic/claude-opus-4-1@20250805",
     "google/gemma-4-31b",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-coder-480b-a35b-instruct",
@@ -94,18 +94,18 @@ EXCLUDE_MODEL_TERMS = (
 DATASET_SPECS = {
     "primary": {
         "seed": 20260406,
-        "counts": {"easy": 6, "medium": 6, "hard": 6},
-        "description": "Quota-recovery slice used to recover multi-model evidence under Kaggle budget limits.",
+        "counts": {"easy": 1, "medium": 0, "hard": 0},
+        "description": "Single-scenario slice used to harvest novelty coverage under tight Kaggle quota limits.",
     },
     "probe": {
         "seed": 20260407,
-        "counts": {"easy": 8, "medium": 8, "hard": 8},
-        "description": "Breadth sweep slice for extra model coverage.",
+        "counts": {"easy": 0, "medium": 0, "hard": 0},
+        "description": "Disabled during novelty-harvest runs.",
     },
     "holdout": {
         "seed": 20260408,
-        "counts": {"easy": 6, "medium": 6, "hard": 6},
-        "description": "Robustness slice for top primary models.",
+        "counts": {"easy": 0, "medium": 0, "hard": 0},
+        "description": "Disabled during novelty-harvest runs.",
     },
 }
 BENCHPRESS_MAP = {
@@ -436,18 +436,11 @@ def select_primary_models(
     healthcheck_model_names: list[str],
     fallback_names: list[str],
 ) -> list[str]:
-    mapped_fallback_names = [name for name in fallback_names if name in BENCHPRESS_MAP]
-    priority = {name: index for index, name in enumerate(mapped_fallback_names)}
+    priority = {name: index for index, name in enumerate(healthcheck_model_names)}
     health_records = {
         row["model_name"]: row
         for row in health_summary.to_dict(orient="records")
     }
-    denied_models = {
-        name
-        for name, row in health_records.items()
-        if row.get("dominant_error_type") == "PermissionDeniedError"
-    }
-
     ranked = sorted(
         healthcheck_model_names,
         key=lambda name: (
@@ -459,19 +452,11 @@ def select_primary_models(
         ),
     )
 
-    selected = [
+    return [
         name
         for name in ranked
         if int(health_records.get(name, {}).get("parsed", 0)) > 0
-    ]
-    for name in ranked + mapped_fallback_names:
-        if name in denied_models:
-            continue
-        if name in AVAILABLE_MODEL_NAMES and name in BENCHPRESS_MAP and name not in selected:
-            selected.append(name)
-        if len(selected) >= RUN_PROFILE["primary_model_count"]:
-            break
-    return selected
+    ][: RUN_PROFILE["primary_model_count"]]
 
 
 def build_benchpress_scores(
