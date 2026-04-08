@@ -8,6 +8,8 @@
 # 2. spend the hosted Benchmarks quota on a broad frontier-model sweep,
 # 3. export per-difficulty and per-family artifacts for the writeup, and
 # 4. keep a live progress log in `/kaggle/working/goalshield_progress.json`.
+#
+# Disabled slices still emit schema-correct empty datasets so quota-recovery runs can trim phases safely.
 
 # %%
 !pip install -q https://github.com/Kaggle/kaggle-benchmarks/archive/refs/heads/ci.zip

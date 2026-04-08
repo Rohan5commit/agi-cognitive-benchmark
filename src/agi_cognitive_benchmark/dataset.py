@@ -9,6 +9,18 @@ import pandas as pd
 from .generator import DIFFICULTY_SPECS, generate_scenario
 from .models import Scenario, Solution
 
+DATASET_COLUMNS = [
+    "scenario_id",
+    "difficulty",
+    "family",
+    "prompt",
+    "scenario_json",
+    "solution_json",
+    "gold_schedule",
+    "gold_packets",
+    "moved_tasks",
+]
+
 
 def generate_benchmark_dataset(
     seed: int,
@@ -60,7 +72,10 @@ def load_dataset_records(path: str | Path) -> list[dict[str, object]]:
 
 
 def build_records_dataframe(records: Iterable[dict[str, object]]) -> pd.DataFrame:
-    return pd.DataFrame(list(records))
+    materialized = list(records)
+    if not materialized:
+        return pd.DataFrame(columns=DATASET_COLUMNS)
+    return pd.DataFrame(materialized).reindex(columns=DATASET_COLUMNS)
 
 
 def rehydrate(record: dict[str, object]) -> tuple[Scenario, Solution]:
